@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import { useVault, ROOT_FOLDER_ID } from "./composables/useVault";
+import LandingView from "./components/LandingView.vue";
 import SetupView from "./components/SetupView.vue";
 import UnlockView from "./components/UnlockView.vue";
 import NoteListView from "./components/NoteListView.vue";
@@ -11,6 +12,17 @@ import ModalDialog from "./components/ModalDialog.vue";
 
 const vaultApi = useVault();
 const syncingFromPrompt = ref(false);
+
+// Shown once, only to brand-new visitors (no vault created yet). Returning
+// users land straight on the unlock screen -- no marketing copy in the way
+// of opening their notes. Dismissing it is remembered so a reload mid-setup
+// doesn't bring it back.
+const LANDING_DISMISSED_KEY = "secure-notes-landing-dismissed";
+const showLanding = ref(false);
+function dismissLanding() {
+  showLanding.value = false;
+  localStorage.setItem(LANDING_DISMISSED_KEY, "1");
+}
 
 async function syncFromPrompt() {
   syncingFromPrompt.value = true;
@@ -57,13 +69,17 @@ function handleVisibilityChange() {
 
 onMounted(async () => {
   await vaultApi.init();
+  if (vaultApi.state.value === "needs-setup" && localStorage.getItem(LANDING_DISMISSED_KEY) !== "1") {
+    showLanding.value = true;
+  }
   document.addEventListener("visibilitychange", handleVisibilityChange);
 });
 onUnmounted(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
 </script>
 
 <template>
-  <SetupView v-if="vaultApi.state.value === 'needs-setup'" :vault="vaultApi" />
+  <LandingView v-if="showLanding" @get-started="dismissLanding" />
+  <SetupView v-else-if="vaultApi.state.value === 'needs-setup'" :vault="vaultApi" />
   <UnlockView v-else-if="vaultApi.state.value === 'locked'" :vault="vaultApi" />
   <template v-else-if="vaultApi.state.value === 'unlocked'">
     <NoteListView

@@ -141,6 +141,44 @@ export async function deleteFolder(id: string): Promise<boolean> {
   return true;
 }
 
+// -------- search --------
+
+export interface SearchEntry {
+  id: string;
+  title: string;
+  body: string;
+  folderId: string;
+  updatedAt: number;
+}
+
+/**
+ * Decrypts every note this device already knows about (restoreFromDrive
+ * mirrors each one into NOTES_STORE as it's pulled, so this needs no Drive
+ * access) so callers can search across the whole vault client-side. Built
+ * fresh on demand rather than cached/persisted -- the result is plaintext,
+ * so it should live only as long as the caller needs it and never survive
+ * a lock.
+ */
+export async function buildSearchIndex(onProgress?: (done: number, total: number) => void): Promise<SearchEntry[]> {
+  const index = await vault.loadIndex();
+  const entries: SearchEntry[] = [];
+  let done = 0;
+  for (const meta of index.notes) {
+    const encrypted = await dbGet<Uint8Array>(NOTES_STORE, meta.id);
+    if (encrypted) {
+      try {
+        const content = await decryptDocxFile(session.currentSessionPassword(), encrypted);
+        entries.push({ id: meta.id, title: content.title, body: content.body, folderId: meta.folderId, updatedAt: meta.updatedAt });
+      } catch {
+        // shouldn't happen while unlocked -- skip rather than fail the whole search
+      }
+    }
+    done++;
+    onProgress?.(done, index.notes.length);
+  }
+  return entries;
+}
+
 // -------- Drive sync --------
 
 export function fileNameFor(meta: NoteMeta): string {

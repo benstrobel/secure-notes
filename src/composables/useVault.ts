@@ -6,6 +6,7 @@ import { exportVaultZip, importVaultZip } from "../data/zipBackup";
 import { currentSessionPassword } from "../data/session";
 import { WrongPasswordError } from "../crypto/agileDocx";
 import type { Folder, Note, NoteMeta } from "../data/types";
+import type { SearchEntry } from "../data/notes";
 import { ROOT_FOLDER_ID } from "../data/types";
 
 export type AppState = "loading" | "needs-setup" | "locked" | "unlocked";
@@ -193,6 +194,11 @@ export function useVault() {
       const ok = await notesRepo.changePassword(oldPassword, newPassword);
       if (ok) void trySilentSync();
       return ok;
+    },
+
+    /** Decrypts every locally known note so the caller can search across the whole vault -- see notes.ts's buildSearchIndex. */
+    async buildSearchIndex(onProgress?: (done: number, total: number) => void): Promise<SearchEntry[]> {
+      return notesRepo.buildSearchIndex(onProgress);
     },
 
     async exportZip(): Promise<Blob> {

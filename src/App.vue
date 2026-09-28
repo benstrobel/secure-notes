@@ -6,6 +6,7 @@ import SetupView from "./components/SetupView.vue";
 import UnlockView from "./components/UnlockView.vue";
 import NoteListView from "./components/NoteListView.vue";
 import NoteEditorView from "./components/NoteEditorView.vue";
+import SearchView from "./components/SearchView.vue";
 import SettingsView from "./components/SettingsView.vue";
 import ConflictCompareView from "./components/ConflictCompareView.vue";
 import ModalDialog from "./components/ModalDialog.vue";
@@ -32,20 +33,24 @@ async function syncFromPrompt() {
 
 type Screen =
   | { name: "list" }
-  | { name: "editor"; noteId: string; initialFolderId?: string; initialTitle?: string }
+  | { name: "editor"; noteId: string; initialFolderId?: string; initialTitle?: string; initialSearchQuery?: string }
   | { name: "settings" }
+  | { name: "search" }
   | { name: "compare"; noteAId: string; noteBId: string };
 const screen = ref<Screen>({ name: "list" });
 const currentFolderId = ref(ROOT_FOLDER_ID);
 
-function openNote(spec: { id: string; folderId?: string; title?: string }) {
-  screen.value = { name: "editor", noteId: spec.id, initialFolderId: spec.folderId, initialTitle: spec.title };
+function openNote(spec: { id: string; folderId?: string; title?: string; searchQuery?: string }) {
+  screen.value = { name: "editor", noteId: spec.id, initialFolderId: spec.folderId, initialTitle: spec.title, initialSearchQuery: spec.searchQuery };
 }
 function backToList() {
   screen.value = { name: "list" };
 }
 function openSettings() {
   screen.value = { name: "settings" };
+}
+function openSearch() {
+  screen.value = { name: "search" };
 }
 function openCompare(spec: { aId: string; bId: string }) {
   screen.value = { name: "compare", noteAId: spec.aId, noteBId: spec.bId };
@@ -88,6 +93,7 @@ onUnmounted(() => document.removeEventListener("visibilitychange", handleVisibil
       v-model:current-folder-id="currentFolderId"
       @open-note="openNote"
       @open-settings="openSettings"
+      @open-search="openSearch"
       @compare-conflict="openCompare"
     />
     <NoteEditorView
@@ -96,9 +102,11 @@ onUnmounted(() => document.removeEventListener("visibilitychange", handleVisibil
       :note-id="screen.noteId"
       :initial-folder-id="screen.initialFolderId"
       :initial-title="screen.initialTitle"
+      :initial-search-query="screen.initialSearchQuery"
       @back="backToList"
     />
     <SettingsView v-else-if="screen.name === 'settings'" :vault="vaultApi" @back="backToList" />
+    <SearchView v-else-if="screen.name === 'search'" :vault="vaultApi" @back="backToList" @open-note="openNote" />
     <ConflictCompareView
       v-else-if="screen.name === 'compare'"
       :vault="vaultApi"

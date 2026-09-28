@@ -8,6 +8,7 @@ const props = defineProps<{ vault: ReturnType<typeof useVault>; currentFolderId:
 const emit = defineEmits<{
   "open-note": [spec: { id: string; folderId?: string; title?: string }];
   "open-settings": [];
+  "open-search": [];
   "update:currentFolderId": [id: string];
   "compare-conflict": [spec: { aId: string; bId: string }];
 }>();
@@ -109,6 +110,7 @@ async function deleteFolderPrompt(id: string, name: string) {
       <div class="top-bar-inner">
         <button v-if="currentFolder" class="icon-btn" @click="goUp" aria-label="Up one folder">←</button>
         <h1>{{ currentFolder ? currentFolder.name : "Secure Notes" }}</h1>
+        <button class="icon-btn" @click="emit('open-search')" aria-label="Search notes">🔎</button>
         <button class="icon-btn" @click="emit('open-settings')" aria-label="Settings">⚙</button>
       </div>
     </div>
@@ -136,7 +138,7 @@ async function deleteFolderPrompt(id: string, name: string) {
       </div>
 
       <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem">
-        <button class="btn" style="flex: 1" @click="addDailyNote">＋ Daily entry</button>
+        <button v-if="!currentFolder" class="btn" style="flex: 1" @click="addDailyNote">＋ Daily entry</button>
         <button class="btn btn-secondary" style="flex: 1" @click="openAddNote">＋ New note</button>
       </div>
 

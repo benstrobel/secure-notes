@@ -1,0 +1,45 @@
+name: Deploy to bunny.net
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "infra/**"
+      - "**.md"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-bunny
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx vue-tsc -b --noEmit
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        env:
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+        run: npm run build
+
+      - name: Sync dist/ to bunny.net Storage
+        env:
+          BUNNY_STORAGE_HOSTNAME: ${{ secrets.BUNNY_STORAGE_HOSTNAME }}
+          BUNNY_STORAGE_ZONE: ${{ secrets.BUNNY_STORAGE_ZONE }}
+          BUNNY_STORAGE_ACCESS_KEY: ${{ secrets.BUNNY_STORAGE_ACCESS_KEY }}
+        run: bash scripts/deploy-bunny.sh dist

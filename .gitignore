@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+.DS_Store
+*.local
+
+# Local env files hold the Google OAuth client id for your own deployment --
+# never something to commit (see README.md).
+.env
+.env.*
+!.env.example
+
+.vscode/*
+!.vscode/extensions.json
+.idea/

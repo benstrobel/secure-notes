@@ -1,0 +1,179 @@
+:root {
+  --ink: #1b2430;
+  --ink-light: #2a3644;
+  --gold: #f2c744;
+  --gold-dark: #b8932e;
+  --paper: #fbf9f4;
+  --paper-dim: #efece4;
+  --error: #b3261e;
+  --border: #ddd6c5;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 10px;
+  border: none;
+  font-weight: 600;
+  background: var(--ink);
+  color: white;
+  min-height: 44px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1.5px solid var(--border);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.field {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: white;
+  min-height: 44px;
+}
+
+.field:focus {
+  outline: 2px solid var(--gold);
+  outline-offset: -1px;
+}
+
+.error-text {
+  color: var(--error);
+  font-size: 0.9rem;
+}
+
+.top-bar {
+  border-bottom: 1px solid var(--border);
+  background: var(--paper);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.top-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.top-bar h1 {
+  font-size: 1.1rem;
+  margin: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+}
+
+.icon-btn:hover {
+  background: var(--paper-dim);
+}
+
+.screen {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.screen-body {
+  padding: 1rem;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1;
+}
+
+.editor-title,
+.editor-body {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 0.4rem 0;
+  border-radius: 6px;
+  outline: none;
+}
+
+.editor-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.editor-body {
+  font: inherit;
+  font-size: 1rem;
+  flex: 1;
+  resize: none;
+  min-height: 50vh;
+}
+
+.editor-title:focus,
+.editor-body:focus {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.folder-row:hover,
+.note-row:hover {
+  background: var(--paper-dim);
+}

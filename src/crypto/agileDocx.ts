@@ -78,6 +78,14 @@ async function blockKeyDerive(hFinal: Uint8Array, blockKey: Uint8Array, keyBytes
   return full.slice(0, keyBytes);
 }
 
+// Same construction as blockKeyDerive, but for the dataIntegrity IVs: these
+// are salted with keyDataSalt (not hFinal) and truncated to the block size
+// (16), not the key size.
+async function ivDerive(salt: Uint8Array, blockKey: Uint8Array): Promise<Uint8Array> {
+  const full = await sha512(concatBytes(salt, blockKey));
+  return full.slice(0, 16);
+}
+
 export interface AgileEncrypted {
   encryptionInfo: Uint8Array;
   encryptedPackage: Uint8Array;
@@ -119,13 +127,17 @@ export async function encryptAgile(password: string, plainPackage: Uint8Array): 
   }
   const encryptedPackage = concatBytes(lengthPrefix, ...segments);
 
-  // HMAC over the encrypted package, for the dataIntegrity element.
+  // HMAC over the encrypted package, for the dataIntegrity element. Per
+  // MS-OFFCRYPTO 2.3.4.14, the HMAC key/value are encrypted with the
+  // package's own secret key (not a password-derived key), with IVs derived
+  // from keyDataSalt -- so verifying integrity doesn't require redoing the
+  // (expensive) password-based key derivation.
   const hmacKey = randomBytes(64);
   const hmacValue = await hmacSha512(hmacKey, encryptedPackage);
-  const keyHmacKey = await blockKeyDerive(hFinal, BLOCK_KEY.hmacKey, 32);
-  const encryptedHmacKey = await aesEncryptNoPadding(keyHmacKey, passwordSalt, hmacKey);
-  const keyHmacValue = await blockKeyDerive(hFinal, BLOCK_KEY.hmacValue, 32);
-  const encryptedHmacValue = await aesEncryptNoPadding(keyHmacValue, passwordSalt, hmacValue);
+  const hmacKeyIv = await ivDerive(keyDataSalt, BLOCK_KEY.hmacKey);
+  const encryptedHmacKey = await aesEncryptNoPadding(packageKey, hmacKeyIv, hmacKey);
+  const hmacValueIv = await ivDerive(keyDataSalt, BLOCK_KEY.hmacValue);
+  const encryptedHmacValue = await aesEncryptNoPadding(packageKey, hmacValueIv, hmacValue);
 
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <encryption xmlns="http://schemas.microsoft.com/office/2006/encryption" xmlns:p="http://schemas.microsoft.com/office/2006/keyEncryptor/password">

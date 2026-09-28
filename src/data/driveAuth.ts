@@ -40,6 +40,16 @@ let scriptLoadPromise: Promise<void> | null = null;
 // already-cached token -- it never itself triggers a live GIS round-trip.
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
+// True for the whole span of a live (promptIfNeeded) token request, including
+// the sign-in screen itself -- so callers (App.vue's auto-lock-on-hide) can
+// tell "the tab went to background because we opened Google's sign-in" apart
+// from "the user actually left the app," and not lock (wiping the in-memory
+// session password) out from under an in-progress connect/sync.
+let authInFlight = false;
+export function isAuthRequestInFlight(): boolean {
+  return authInFlight;
+}
+
 function loadGisScript(): Promise<void> {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
   if (scriptLoadPromise) return scriptLoadPromise;
@@ -70,43 +80,49 @@ export async function getAccessToken(promptIfNeeded: boolean): Promise<string | 
   if (!promptIfNeeded) return null;
 
   if (!CLIENT_ID) throw new Error("VITE_GOOGLE_CLIENT_ID is not configured -- see README.md");
-  await loadGisScript();
 
-  // If the popup is closed (by the user, by GIS itself, or by the OS on a
-  // mobile PWA) without a completed grant, GIS doesn't reliably invoke
-  // either callback below in every version/browser -- observed in practice
-  // as "Syncing..." never resolving. The timeout guarantees this always
-  // settles one way or another.
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error("Drive authorization timed out"));
-    }, 60_000);
+  authInFlight = true;
+  try {
+    await loadGisScript();
 
-    const client = window.google!.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: DRIVE_FILE_SCOPE,
-      callback: (response) => {
+    // If the popup is closed (by the user, by GIS itself, or by the OS on a
+    // mobile PWA) without a completed grant, GIS doesn't reliably invoke
+    // either callback below in every version/browser -- observed in practice
+    // as "Syncing..." never resolving. The timeout guarantees this always
+    // settles one way or another.
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
-        if (response.access_token) {
-          const expiresInMs = (response.expires_in ?? 3600) * 1000;
-          cachedToken = { token: response.access_token, expiresAt: Date.now() + expiresInMs - 60_000 };
-          resolve(response.access_token);
-        } else {
-          reject(new Error(response.error ?? "Drive authorization failed"));
-        }
-      },
-      error_callback: (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        reject(new Error(error.message ?? error.type ?? "Drive authorization failed"));
-      },
+        reject(new Error("Drive authorization timed out"));
+      }, 60_000);
+
+      const client = window.google!.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: DRIVE_FILE_SCOPE,
+        callback: (response) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (response.access_token) {
+            const expiresInMs = (response.expires_in ?? 3600) * 1000;
+            cachedToken = { token: response.access_token, expiresAt: Date.now() + expiresInMs - 60_000 };
+            resolve(response.access_token);
+          } else {
+            reject(new Error(response.error ?? "Drive authorization failed"));
+          }
+        },
+        error_callback: (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error(error.message ?? error.type ?? "Drive authorization failed"));
+        },
+      });
+      client.requestAccessToken({ prompt: "" });
     });
-    client.requestAccessToken({ prompt: "" });
-  });
+  } finally {
+    authInFlight = false;
+  }
 }

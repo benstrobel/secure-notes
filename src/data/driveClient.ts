@@ -14,6 +14,12 @@ export interface DriveEntry {
   id: string;
   name: string;
   mimeType: string;
+  modifiedTime: string;
+}
+
+export interface UploadedFile {
+  id: string;
+  modifiedTime: string;
 }
 
 function authHeaders(accessToken: string): Record<string, string> {
@@ -48,7 +54,7 @@ export async function ensureFolder(accessToken: string, name: string, parentId?:
   return created?.id ?? null;
 }
 
-export async function uploadNewFile(accessToken: string, parentId: string, fileName: string, content: Uint8Array): Promise<string | null> {
+export async function uploadNewFile(accessToken: string, parentId: string, fileName: string, content: Uint8Array): Promise<UploadedFile | null> {
   const metadata = JSON.stringify({ name: fileName, parents: [parentId] });
   const boundary = `securenotes-${crypto.randomUUID()}`;
   const parts: Uint8Array[] = [
@@ -59,40 +65,44 @@ export async function uploadNewFile(accessToken: string, parentId: string, fileN
   ];
   const body = concatBytes(...parts);
 
-  const response = await fetch(`${UPLOAD_URL}?uploadType=multipart`, {
+  const response = await fetch(`${UPLOAD_URL}?uploadType=multipart&fields=${encodeURIComponent("id,modifiedTime")}`, {
     method: "POST",
     headers: { ...authHeaders(accessToken), "Content-Type": `multipart/related; boundary=${boundary}` },
     body,
   });
   const result = await jsonOrNull(response);
-  return result?.id ?? null;
+  return result?.id && result?.modifiedTime ? { id: result.id, modifiedTime: result.modifiedTime } : null;
 }
 
-export async function updateFileContent(accessToken: string, fileId: string, content: Uint8Array): Promise<boolean> {
-  const response = await fetch(`${UPLOAD_URL}/${fileId}?uploadType=media`, {
+/** @returns the file's new modifiedTime on success, else null. */
+export async function updateFileContent(accessToken: string, fileId: string, content: Uint8Array): Promise<string | null> {
+  const response = await fetch(`${UPLOAD_URL}/${fileId}?uploadType=media&fields=${encodeURIComponent("modifiedTime")}`, {
     method: "PATCH",
     headers: { ...authHeaders(accessToken), "Content-Type": DOCX_MIME },
     body: content,
   });
-  return response.ok;
+  const result = await jsonOrNull(response);
+  return result?.modifiedTime ?? null;
 }
 
-/** Renames and/or moves a file to a different parent folder. */
+/** Renames and/or moves a file to a different parent folder. @returns the file's new modifiedTime on success, else null. */
 export async function renameOrMoveFile(
   accessToken: string,
   fileId: string,
   opts: { newName?: string; newParentId?: string; oldParentId?: string },
-): Promise<boolean> {
+): Promise<string | null> {
   const params = new URLSearchParams();
   if (opts.newParentId) params.set("addParents", opts.newParentId);
   if (opts.oldParentId) params.set("removeParents", opts.oldParentId);
-  const url = `${FILES_URL}/${fileId}${params.toString() ? `?${params}` : ""}`;
+  params.set("fields", "modifiedTime");
+  const url = `${FILES_URL}/${fileId}?${params}`;
   const response = await fetch(url, {
     method: "PATCH",
     headers: { ...authHeaders(accessToken), "Content-Type": "application/json" },
     body: JSON.stringify(opts.newName ? { name: opts.newName } : {}),
   });
-  return response.ok;
+  const result = await jsonOrNull(response);
+  return result?.modifiedTime ?? null;
 }
 
 export async function deleteFile(accessToken: string, fileId: string): Promise<boolean> {
@@ -102,7 +112,7 @@ export async function deleteFile(accessToken: string, fileId: string): Promise<b
 
 export async function listFolderChildren(accessToken: string, folderId: string): Promise<DriveEntry[]> {
   const query = `'${folderId}' in parents and trashed=false`;
-  const url = `${FILES_URL}?q=${encodeURIComponent(query)}&fields=${encodeURIComponent("files(id,name,mimeType)")}&pageSize=1000`;
+  const url = `${FILES_URL}?q=${encodeURIComponent(query)}&fields=${encodeURIComponent("files(id,name,mimeType,modifiedTime)")}&pageSize=1000`;
   const result = await jsonOrNull(await fetch(url, { headers: authHeaders(accessToken) }));
   return result?.files ?? [];
 }

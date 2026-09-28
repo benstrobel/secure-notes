@@ -6,6 +6,7 @@ import UnlockView from "./components/UnlockView.vue";
 import NoteListView from "./components/NoteListView.vue";
 import NoteEditorView from "./components/NoteEditorView.vue";
 import SettingsView from "./components/SettingsView.vue";
+import ConflictCompareView from "./components/ConflictCompareView.vue";
 import ModalDialog from "./components/ModalDialog.vue";
 
 const vaultApi = useVault();
@@ -20,7 +21,8 @@ async function syncFromPrompt() {
 type Screen =
   | { name: "list" }
   | { name: "editor"; noteId: string; initialFolderId?: string; initialTitle?: string }
-  | { name: "settings" };
+  | { name: "settings" }
+  | { name: "compare"; noteAId: string; noteBId: string };
 const screen = ref<Screen>({ name: "list" });
 const currentFolderId = ref(ROOT_FOLDER_ID);
 
@@ -33,12 +35,20 @@ function backToList() {
 function openSettings() {
   screen.value = { name: "settings" };
 }
+function openCompare(spec: { aId: string; bId: string }) {
+  screen.value = { name: "compare", noteAId: spec.aId, noteBId: spec.bId };
+}
 
 // Locks the vault whenever the app leaves the foreground (tab switch, app
 // backgrounded, phone locked) -- the web equivalent of asking for the
 // password again on every real "app start".
 function handleVisibilityChange() {
   if (document.hidden) {
+    // Don't lock out from under an in-progress Drive sign-in -- opening
+    // Google's consent screen backgrounds this tab too, and locking here
+    // wipes the in-memory session password before the OAuth round-trip
+    // (and the sync/connect it's for) can finish.
+    if (vaultApi.isDriveAuthInFlight()) return;
     vaultApi.lock();
     screen.value = { name: "list" };
     currentFolderId.value = ROOT_FOLDER_ID;
@@ -62,6 +72,7 @@ onUnmounted(() => document.removeEventListener("visibilitychange", handleVisibil
       v-model:current-folder-id="currentFolderId"
       @open-note="openNote"
       @open-settings="openSettings"
+      @compare-conflict="openCompare"
     />
     <NoteEditorView
       v-else-if="screen.name === 'editor'"
@@ -72,6 +83,13 @@ onUnmounted(() => document.removeEventListener("visibilitychange", handleVisibil
       @back="backToList"
     />
     <SettingsView v-else-if="screen.name === 'settings'" :vault="vaultApi" @back="backToList" />
+    <ConflictCompareView
+      v-else-if="screen.name === 'compare'"
+      :vault="vaultApi"
+      :note-a-id="screen.noteAId"
+      :note-b-id="screen.noteBId"
+      @back="backToList"
+    />
   </template>
   <div v-else class="screen" style="align-items: center; justify-content: center">
     <span>Loading…</span>

@@ -31,6 +31,10 @@ export interface NoteMeta {
   driveFileId?: string;
   /** Which Drive folder driveFileId currently lives in -- lets syncPending detect a move and issue addParents/removeParents. */
   driveParentFolderId?: string;
+  /** Drive's modifiedTime for driveFileId as of the last successful push or pull -- lets restoreFromDrive tell "unchanged since we last synced" apart from "go fetch it," and detect a real conflict (both sides changed). */
+  driveModifiedTime?: string;
+  /** Set on a note restoreFromDrive created to preserve a diverged remote/local version rather than pick a winner -- the id of the other note in the pair, so the UI can offer "compare and keep one." */
+  conflictOf?: string;
 }
 
 export interface VaultIndex {

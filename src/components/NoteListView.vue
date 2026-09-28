@@ -9,10 +9,24 @@ const emit = defineEmits<{
   "open-note": [spec: { id: string; folderId?: string; title?: string }];
   "open-settings": [];
   "update:currentFolderId": [id: string];
+  "compare-conflict": [spec: { aId: string; bId: string }];
 }>();
 
 const folders = computed(() => props.vault.folders.value);
 const notes = computed(() => props.vault.notes.value);
+
+// Pairs restoreFromDrive left behind because a note diverged between
+// devices (same day's entry created on both, or an edit on both sides
+// between syncs) -- see notes.ts's restoreFromDrive/resolveConflict.
+const conflictPairs = computed(() => {
+  const pairs: { original: (typeof notes.value)[number]; copy: (typeof notes.value)[number] }[] = [];
+  for (const copy of notes.value) {
+    if (!copy.conflictOf) continue;
+    const original = notes.value.find((n) => n.id === copy.conflictOf);
+    if (original) pairs.push({ original, copy });
+  }
+  return pairs;
+});
 
 const currentFolder = computed(() => folders.value.find((f) => f.id === props.currentFolderId) ?? null);
 const subfolders = computed(() => folders.value.filter((f) => f.parentId === props.currentFolderId));
@@ -105,6 +119,20 @@ async function deleteFolderPrompt(id: string, name: string) {
           <a href="#" @click.prevent="open(b.id)">{{ b.name }}</a>
           <span v-if="i < breadcrumb.length - 1"> / </span>
         </span>
+      </div>
+
+      <div v-if="conflictPairs.length" style="margin-bottom: 1rem">
+        <div
+          v-for="pair in conflictPairs"
+          :key="pair.copy.id"
+          style="background: #fff4e0; border: 1.5px solid var(--gold-dark); border-radius: 10px; padding: 0.6rem 0.75rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem"
+        >
+          <div style="flex: 1; font-size: 0.85rem">
+            <strong>Two versions of "{{ pair.original.title || "Untitled" }}"</strong>
+            <div style="color: #7a5b00">Synced from another device -- pick which to keep.</div>
+          </div>
+          <button class="btn btn-secondary" @click="emit('compare-conflict', { aId: pair.original.id, bId: pair.copy.id })">Compare</button>
+        </div>
       </div>
 
       <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem">

@@ -85,6 +85,23 @@ export async function deleteNote(id: string): Promise<string | undefined> {
   return driveFileId;
 }
 
+/**
+ * Resolves a `conflictOf` pair created by restoreFromDrive: discards
+ * `discardId` entirely (keeping `keepId` exactly as it was) and clears the
+ * pairing off whichever side is kept, so it stops showing up as an
+ * unresolved conflict.
+ * @returns the discarded note's Drive file id, if it had one, so the caller can best-effort delete it remotely too.
+ */
+export async function resolveConflict(keepId: string, discardId: string): Promise<string | undefined> {
+  const index = await vault.loadIndex();
+  const keep = index.notes.find((n) => n.id === keepId);
+  if (keep?.conflictOf === discardId) delete keep.conflictOf;
+  const driveFileId = index.notes.find((n) => n.id === discardId)?.driveFileId;
+  await dbDelete(NOTES_STORE, discardId);
+  await vault.saveIndex({ ...index, notes: index.notes.filter((n) => n.id !== discardId) });
+  return driveFileId;
+}
+
 // -------- folders --------
 
 export async function createFolder(name: string, parentId: string): Promise<Folder> {
@@ -174,27 +191,31 @@ export async function syncPending(accessToken: string): Promise<void> {
     const fileName = fileNameFor(meta);
 
     if (!meta.driveFileId) {
-      const newId = await driveClient.uploadNewFile(accessToken, targetDriveFolderId, fileName, encrypted);
-      if (!newId) continue;
-      meta.driveFileId = newId;
+      const uploaded = await driveClient.uploadNewFile(accessToken, targetDriveFolderId, fileName, encrypted);
+      if (!uploaded) continue;
+      meta.driveFileId = uploaded.id;
       meta.driveParentFolderId = targetDriveFolderId;
+      meta.driveModifiedTime = uploaded.modifiedTime;
       meta.pendingSync = false;
       changed = true;
       continue;
     }
 
-    const ok = await driveClient.updateFileContent(accessToken, meta.driveFileId, encrypted);
-    if (!ok) continue;
+    let modifiedTime = await driveClient.updateFileContent(accessToken, meta.driveFileId, encrypted);
+    if (!modifiedTime) continue;
     if (meta.driveParentFolderId !== targetDriveFolderId) {
-      await driveClient.renameOrMoveFile(accessToken, meta.driveFileId, {
+      const moved = await driveClient.renameOrMoveFile(accessToken, meta.driveFileId, {
         newName: fileName,
         newParentId: targetDriveFolderId,
         oldParentId: meta.driveParentFolderId,
       });
+      if (moved) modifiedTime = moved;
       meta.driveParentFolderId = targetDriveFolderId;
     } else {
-      await driveClient.renameOrMoveFile(accessToken, meta.driveFileId, { newName: fileName });
+      const renamed = await driveClient.renameOrMoveFile(accessToken, meta.driveFileId, { newName: fileName });
+      if (renamed) modifiedTime = renamed;
     }
+    meta.driveModifiedTime = modifiedTime;
     meta.pendingSync = false;
     changed = true;
   }
@@ -207,17 +228,66 @@ export async function deleteRemoteFile(accessToken: string, driveFileId: string)
 }
 
 /**
- * Recursively walks the Drive folder tree under the vault's root,
- * mirroring any folders not yet known locally and importing any `.docx`
- * files not already tracked by a local note. Requires the currently
- * unlocked password to also unlock those remote files.
- * @returns how many notes were pulled in.
+ * Recursively walks the Drive folder tree under the vault's root: mirrors
+ * any folders not yet known locally, pulls in any `.docx` not yet tracked
+ * by a local note, and -- for a file this device already knows (matched by
+ * `driveFileId`, never by name/date, since two devices can independently
+ * create "today" before ever syncing) -- pulls down anything Drive's copy
+ * gained since the last sync. `driveModifiedTime` is what lets a note tell
+ * "unchanged remotely" apart from "go fetch it" without downloading and
+ * decrypting everything on every call. Requires the currently unlocked
+ * password to also unlock those remote files.
+ *
+ * Never silently picks a winner on a real conflict (both sides changed
+ * since the last sync, or two devices created the same day's entry before
+ * ever syncing): the local edit is left exactly as it was -- still queued
+ * to push as normal -- and Drive's version lands as a separate note titled
+ * "(from other device)" for the user to compare and merge/delete by hand.
+ *
+ * @returns how many notes were pulled in (new imports + conflict copies).
  */
 export async function restoreFromDrive(accessToken: string): Promise<number> {
   const config = await vault.loadConfig();
   if (!config.driveFolderId) return 0;
   const index = await vault.loadIndex();
   let imported = 0;
+
+  /**
+   * A conflict copy's title: date-based when the note it diverged from was
+   * a daily note, so its filename still reads like a date instead of
+   * falling back to the (locale-dependent, human) suggested title -- and
+   * always carries a short disambiguator from the source Drive file's own
+   * id, so multiple conflict copies of the same note (e.g. leftover
+   * duplicates from before this device ever saw driveModifiedTime-based
+   * dedup) never collide into identically-named Drive files.
+   */
+  function conflictTitle(originalId: string, fallbackTitle: string, sourceDriveFileId: string): string {
+    const base = DAILY_ID_PATTERN.test(originalId) ? originalId : fallbackTitle;
+    return `${base} (from other device, ${sourceDriveFileId.slice(-6)})`;
+  }
+
+  /** A file whose content now matches Drive exactly -- new, or an update to one already linked to a local note. `conflictOf`, when given, flags this as one half of a diverged pair for the UI's "compare and keep one" helper. */
+  async function importFromDrive(bytes: Uint8Array, id: string, title: string, folderId: string, driveFileId: string, driveParentFolderId: string, driveModifiedTime: string, conflictOf?: string): Promise<void> {
+    await dbPut(NOTES_STORE, id, bytes);
+    const now = Date.now();
+    index.notes.push({ id, title, folderId, createdAt: now, updatedAt: now, pendingSync: false, driveFileId, driveParentFolderId, driveModifiedTime, conflictOf });
+    imported++;
+  }
+
+  /**
+   * Drive's side of a conflict where the file it came from is about to be
+   * overwritten by a local pending push (so simply linking to it, like
+   * importFromDrive does, would lose it the moment that push happens): a
+   * fresh, as-yet-unlinked local note, queued to push as its own new file
+   * next sync instead. `conflictOf` is the other note in the diverged pair.
+   */
+  async function importAsConflictCopy(bytes: Uint8Array, title: string, folderId: string, conflictOf: string): Promise<void> {
+    const id = crypto.randomUUID();
+    await dbPut(NOTES_STORE, id, bytes);
+    const now = Date.now();
+    index.notes.push({ id, title, folderId, createdAt: now, updatedAt: now, pendingSync: true, conflictOf });
+    imported++;
+  }
 
   async function walk(driveFolderId: string, localFolderId: string): Promise<void> {
     const children = await driveClient.listFolderChildren(accessToken, driveFolderId);
@@ -234,30 +304,53 @@ export async function restoreFromDrive(accessToken: string): Promise<number> {
           index.folders.push(localSub);
         }
         await walk(child.id, localSub.id);
-      } else if (child.name.endsWith(".docx") && !index.notes.some((n) => n.driveFileId === child.id)) {
-        const bytes = await driveClient.downloadFile(accessToken, child.id);
-        if (!bytes) continue;
-        try {
-          const content = await decryptDocxFile(session.currentSessionPassword(), bytes);
-          const now = Date.now();
-          const id = child.name.match(DAILY_ID_PATTERN) ? child.name.replace(/\.docx$/, "") : crypto.randomUUID();
-          if (index.notes.some((n) => n.id === id)) continue; // already have this daily note locally
-          await dbPut(NOTES_STORE, id, bytes);
-          index.notes.push({
-            id,
-            title: content.title,
-            folderId: localFolderId,
-            createdAt: now,
-            updatedAt: now,
-            pendingSync: false,
-            driveFileId: child.id,
-            driveParentFolderId: driveFolderId,
-          });
-          imported++;
-        } catch {
-          continue; // wrong password / unrelated file -- skip it
-        }
+        continue;
       }
+      if (!child.name.toLowerCase().endsWith(".docx")) continue;
+
+      const known = index.notes.find((n) => n.driveFileId === child.id);
+      if (known && known.driveModifiedTime === child.modifiedTime) continue; // nothing changed since we last synced this one
+
+      const bytes = await driveClient.downloadFile(accessToken, child.id);
+      if (!bytes) continue;
+      let content;
+      try {
+        content = await decryptDocxFile(session.currentSessionPassword(), bytes);
+      } catch {
+        continue; // wrong password / unrelated file -- skip it
+      }
+
+      if (known) {
+        if (known.pendingSync) {
+          // Known changed here too since the last sync we both saw --
+          // genuine conflict. Leave the local edit queued to push untouched.
+          await importAsConflictCopy(bytes, conflictTitle(known.id, content.title || known.title, child.id), localFolderId, known.id);
+          known.driveModifiedTime = child.modifiedTime; // don't re-flag this same remote version as a new conflict next time
+        } else {
+          await dbPut(NOTES_STORE, known.id, bytes);
+          known.title = content.title;
+          known.updatedAt = Date.now();
+          known.driveModifiedTime = child.modifiedTime;
+        }
+        continue;
+      }
+
+      const baseName = child.name.replace(/\.docx$/i, "");
+      const dailyId = DAILY_ID_PATTERN.test(baseName) ? baseName : null;
+      const sameDayLocal = dailyId ? index.notes.find((n) => n.id === dailyId) : undefined;
+
+      if (sameDayLocal) {
+        // Both devices created this same day's entry before ever syncing.
+        // Unlike the conflict above, this Drive file isn't about to be
+        // overwritten by anything local (sameDayLocal has no driveFileId of
+        // its own, so it'll become its own new file on the next push) --
+        // so just link straight to it instead of uploading a redundant
+        // duplicate of content Drive already has.
+        await importFromDrive(bytes, crypto.randomUUID(), conflictTitle(dailyId!, content.title, child.id), localFolderId, child.id, driveFolderId, child.modifiedTime, sameDayLocal.id);
+        continue;
+      }
+
+      await importFromDrive(bytes, dailyId ?? crypto.randomUUID(), content.title, localFolderId, child.id, driveFolderId, child.modifiedTime);
     }
   }
 

@@ -1,7 +1,7 @@
 import { ref, computed } from "vue";
 import * as vault from "../data/vault";
 import * as notesRepo from "../data/notes";
-import { getAccessToken, isDriveConfigured as driveAuthConfigured } from "../data/driveAuth";
+import { getAccessToken, isDriveConfigured as driveAuthConfigured, isAuthRequestInFlight } from "../data/driveAuth";
 import { exportVaultZip, importVaultZip } from "../data/zipBackup";
 import { currentSessionPassword } from "../data/session";
 import { WrongPasswordError } from "../crypto/agileDocx";
@@ -43,6 +43,10 @@ async function trySilentSync() {
  * a live request, see driveAuth.ts). If nothing's cached, surfaces
  * `needsSyncPrompt` instead of syncing, since getting a fresh token requires
  * a real user gesture.
+ *
+ * Pulls before it pushes -- restoreFromDrive's conflict detection compares
+ * Drive's current modifiedTime against what we last saw; pushing first would
+ * overwrite a divergent remote copy before ever seeing it existed.
  */
 async function trySilentFullSync() {
   if (!driveConnected.value || !driveAuthConfigured()) return;
@@ -52,8 +56,8 @@ async function trySilentFullSync() {
     return;
   }
   needsSyncPrompt.value = false;
-  await notesRepo.syncPending(token);
   await notesRepo.restoreFromDrive(token);
+  await notesRepo.syncPending(token);
   await refreshLists();
 }
 
@@ -65,6 +69,7 @@ export function useVault() {
     driveConnected: computed(() => driveConnected.value),
     needsSyncPrompt: computed(() => needsSyncPrompt.value),
     isDriveConfigured: driveAuthConfigured(),
+    isDriveAuthInFlight: isAuthRequestInFlight,
 
     async init() {
       await refreshState();
@@ -128,6 +133,16 @@ export function useVault() {
       }
     },
 
+    /** Resolves a sync conflict pair: keeps `keepId` untouched, discards `discardId` (locally and on Drive). */
+    async resolveConflict(keepId: string, discardId: string) {
+      const driveFileId = await notesRepo.resolveConflict(keepId, discardId);
+      await refreshLists();
+      if (driveFileId) {
+        const token = await getAccessToken(true).catch(() => null);
+        if (token) await notesRepo.deleteRemoteFile(token, driveFileId);
+      }
+    },
+
     async createFolder(name: string, parentId: string): Promise<Folder> {
       const folder = await notesRepo.createFolder(name, parentId);
       await refreshLists();
@@ -167,8 +182,9 @@ export function useVault() {
       const token = await getAccessToken(true).catch(() => null);
       if (!token) return null;
       needsSyncPrompt.value = false;
-      await notesRepo.syncPending(token);
+      // Pull before push -- see trySilentFullSync's comment.
       const restored = await notesRepo.restoreFromDrive(token);
+      await notesRepo.syncPending(token);
       await refreshLists();
       return restored;
     },
